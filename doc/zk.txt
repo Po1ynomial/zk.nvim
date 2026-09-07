@@ -1,0 +1,86 @@
+*zk.txt*                       Typst Zettelkasten integration
+
+==============================================================================
+CONTENTS                                                        *zk-contents*
+
+1. Setup .......................................................... |zk-setup|
+2. Commands ..................................................... |zk-commands|
+3. Mappings ..................................................... |zk-mappings|
+4. Decorations ............................................... |zk-decorations|
+
+==============================================================================
+SETUP                                                              *zk-setup*
+
+The plugin requires Neovim 0.12 or newer and the `zk` executable.
+
+Add this to the Neovim configuration: >lua
+
+  require("zk").setup()
+<
+The default language-server command is `{ "zk", "lsp" }`. The default CLI
+command is `{ "zk" }`. Override either when `zk` is not on $PATH: >lua
+
+  require("zk").setup({
+    lsp_cmd = { "/path/to/zk", "lsp" },
+    cli_cmd = { "/path/to/zk" },
+  })
+<
+The plugin starts the `zk` language server only for canonical
+`zettel/YYMMDDHHmm.typ` buffers beneath a `zk.toml` archive root. Tinymist can
+remain attached to the same Typst buffer. The plugin makes `zk.toml` a
+higher-priority Tinymist root marker than `.git`, so imports from `../lib/`
+work even when the archive is not a Git repository.
+
+Set `decorations = false` to disable title extmarks. Set `mappings = false` to
+disable all default mappings. Individual mapping values can also be replaced
+or set to `false`.
+
+==============================================================================
+COMMANDS                                                        *zk-commands*
+
+:ZkFind [query]                                      *:ZkFind*
+    Search live Zettel metadata through `workspace/symbol` and present the
+    results through |vim.ui.select()|.
+
+:ZkBacklinks                                         *:ZkBacklinks*
+    Put all incoming authored reference locations for the current Zettel into
+    the quickfix list.
+
+:ZkDiagnostics                                       *:ZkDiagnostics*
+    Put diagnostics from the attached `zk` language server into quickfix.
+
+:ZkCheck                                             *:ZkCheck*
+    Run `zk check` against saved archive state.
+
+:ZkNew                                               *:ZkNew*
+    Run `zk new`, then edit the generated Zettel.
+
+:ZkRemove [ID]                                       *:ZkRemove*
+    Run guarded removal for ID, or for the current Zettel when ID is omitted.
+
+:ZkRefresh                                           *:ZkRefresh*
+    Refresh title decorations in the current buffer.
+
+==============================================================================
+MAPPINGS                                                        *zk-mappings*
+
+The defaults are buffer-local:
+
+  gd              Follow a Zettel reference with `zk lsp`; use normal LSP
+                  definition elsewhere.
+  <leader>zf      Search Zettel.
+  <leader>zb      Show backlinks.
+  <leader>zd      Show Zettelkasten diagnostics.
+  <leader>zn      Create a Zettel.
+
+==============================================================================
+DECORATIONS                                                  *zk-decorations*
+
+Resolved `@ID` ranges are concealed and replaced with target-title virtual
+text. Missing targets use the `ZkMissingReference` highlight. The raw source
+remains unchanged and becomes visible according to Neovim's conceal rules.
+
+Decorations come from `zk lsp` queries. The Lua plugin does not parse Typst or
+keep an archive graph.
+
+vim:tw=78:ts=8:noet:ft=help:norl:

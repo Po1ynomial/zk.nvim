@@ -1,0 +1,13 @@
+:ZkBacklinks	zk.txt	/*:ZkBacklinks*
+:ZkCheck	zk.txt	/*:ZkCheck*
+:ZkDiagnostics	zk.txt	/*:ZkDiagnostics*
+:ZkFind	zk.txt	/*:ZkFind*
+:ZkNew	zk.txt	/*:ZkNew*
+:ZkRefresh	zk.txt	/*:ZkRefresh*
+:ZkRemove	zk.txt	/*:ZkRemove*
+zk-commands	zk.txt	/*zk-commands*
+zk-contents	zk.txt	/*zk-contents*
+zk-decorations	zk.txt	/*zk-decorations*
+zk-mappings	zk.txt	/*zk-mappings*
+zk-setup	zk.txt	/*zk-setup*
+zk.txt	zk.txt	/*zk.txt*
