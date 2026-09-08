@@ -29,6 +29,11 @@ temp_root=${TMPDIR:-/tmp}
 workspace=$(mktemp -d "${temp_root%/}/zk-inspect-nvim.XXXXXX")
 archive="$workspace/archive"
 report="$workspace/report.json"
+fallback_report="$workspace/fallback-report.json"
+personal_archive="$workspace/personal"
+local_archive="$workspace/local"
+alternate_archive="$workspace/alternate"
+invalid_archive="$workspace/invalid"
 tinymist_runtime="$workspace/tinymist-runtime"
 
 cleanup() {
@@ -99,6 +104,65 @@ cat >"$archive/zettel/2603231412.typ" <<'TYP'
 #category.thoughts
 TYP
 
+for root in "$personal_archive" "$local_archive" "$alternate_archive" "$invalid_archive"; do
+  "$zk_bin" init "$root" >/dev/null
+done
+printf 'format = 2\n' >"$invalid_archive/zk.toml"
+
+cat >"$personal_archive/zettel/2603231500.typ" <<'TYP'
+#import "../lib/zettel.typ": zettel, abstract, keywords, category
+#show: zettel
+
+= Personal note <2603231500>
+
+#abstract[Personal fallback search target.]
+
+#keywords("personal")
+
+#category.thoughts
+TYP
+
+cat >"$personal_archive/zettel/2603231501.typ" <<'TYP'
+#import "../lib/zettel.typ": zettel, abstract, keywords, category
+#show: zettel
+
+= Personal removable <2603231501>
+
+#abstract[Removed from an unrelated buffer.]
+
+#keywords("personal")
+
+#category.thoughts
+TYP
+
+cat >"$local_archive/zettel/2603231500.typ" <<'TYP'
+#import "../lib/zettel.typ": zettel, abstract, keywords, category
+#show: zettel
+
+= Local note <2603231500>
+
+#abstract[Local archive precedence target.]
+
+#keywords("local")
+
+#category.thoughts
+TYP
+mkdir -p "$local_archive/assets"
+printf 'local archive context\n' >"$local_archive/assets/context.txt"
+
+cat >"$alternate_archive/zettel/2603231500.typ" <<'TYP'
+#import "../lib/zettel.typ": zettel, abstract, keywords, category
+#show: zettel
+
+= Alternate note <2603231500>
+
+#abstract[Switched fallback search target.]
+
+#keywords("alternate")
+
+#category.thoughts
+TYP
+
 printf 'running headless Neovim adapter inspection...\n' >&2
 ZK_REPO="$repo_root" \
 ZK_ARCHIVE="$archive" \
@@ -107,6 +171,17 @@ ZK_TINYMIST="$(command -v tinymist)" \
 ZK_TINYMIST_RUNTIME="$tinymist_runtime" \
 ZK_REPORT="$report" \
   nvim --clean --headless -u NONE -l "$repo_root/scripts/inspect_nvim.lua"
+
+printf 'running global archive fallback inspection...\n' >&2
+ZK_REPO="$repo_root" \
+ZK_BIN="$zk_bin" \
+ZK_PERSONAL_ARCHIVE="$personal_archive" \
+ZK_LOCAL_ARCHIVE="$local_archive" \
+ZK_ALTERNATE_ARCHIVE="$alternate_archive" \
+ZK_INVALID_ARCHIVE="$invalid_archive" \
+ZK_MISSING_ARCHIVE="$workspace/missing" \
+ZK_FALLBACK_REPORT="$fallback_report" \
+  nvim --clean --headless -u NONE -l "$repo_root/scripts/inspect_nvim_fallback.lua"
 
 jq -e '
   .client == "zk"
@@ -126,6 +201,21 @@ jq -e '
   and .tinymistRoot
 ' "$report" >/dev/null
 
+jq -e '
+  .eagerStartup
+  and .readableState
+  and .globalSearch
+  and .fallbackAttachment
+  and .globalCli
+  and .globalDiagnostics
+  and .localPrecedence
+  and .invalidSwitchPreserved
+  and .successfulSwitch
+  and .previousLocalClientPreserved
+' "$fallback_report" >/dev/null
+
 printf 'Neovim adapter inspection result\n'
 jq . "$report"
+printf '\nGlobal archive fallback inspection result\n'
+jq . "$fallback_report"
 printf '\ninspection assertions passed\n' >&2

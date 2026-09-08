@@ -5,6 +5,7 @@
 :ZkNew	zk.txt	/*:ZkNew*
 :ZkRefresh	zk.txt	/*:ZkRefresh*
 :ZkRemove	zk.txt	/*:ZkRemove*
+:ZkSetArchive	zk.txt	/*:ZkSetArchive*
 zk-commands	zk.txt	/*zk-commands*
 zk-contents	zk.txt	/*zk-contents*
 zk-decorations	zk.txt	/*zk-decorations*

@@ -13,9 +13,12 @@ SETUP                                                              *zk-setup*
 
 The plugin requires Neovim 0.12 or newer and the `zk` executable.
 
-Add this to the Neovim configuration: >lua
+Configure a personal archive to make archive commands available from every
+buffer: >lua
 
-  require("zk").setup()
+  require("zk").setup({
+    archive = "~/zettelkasten",
+  })
 <
 The default language-server command is `{ "zk", "lsp" }`. The default CLI
 command is `{ "zk" }`. Override either when `zk` is not on $PATH: >lua
@@ -25,11 +28,19 @@ command is `{ "zk" }`. Override either when `zk` is not on $PATH: >lua
     cli_cmd = { "/path/to/zk" },
   })
 <
-The plugin starts the `zk` language server only for canonical
-`zettel/YYMMDDHHmm.typ` buffers beneath a `zk.toml` archive root. Tinymist can
-remain attached to the same Typst buffer. The plugin makes `zk.toml` a
-higher-priority Tinymist root marker than `.git`, so imports from `../lib/`
-work even when the archive is not a Git repository.
+The `archive` option expands `~` and environment variables, resolves relative
+paths against Neovim's current working directory, and validates the archive
+before selecting it. The canonical selected path is readable as
+`require("zk").archive`.
+
+The configured archive starts one background `zk` language server during
+setup. A nearer `zk.toml` above the current buffer takes precedence and gets
+its own server when needed. Without `archive`, the plugin retains local-only
+discovery.
+
+Tinymist can remain attached to the same Typst buffer. The plugin makes
+`zk.toml` a higher-priority Tinymist root marker than `.git`, so imports from
+`../lib/` work even when the archive is not a Git repository.
 
 Set `decorations = false` to disable title extmarks. Set `mappings = false` to
 disable all default mappings. Individual mapping values can also be replaced
@@ -39,15 +50,15 @@ or set to `false`.
 COMMANDS                                                        *zk-commands*
 
 :ZkFind [query]                                      *:ZkFind*
-    Search live Zettel metadata through `workspace/symbol` and present the
-    results through |vim.ui.select()|.
+    Search live Zettel metadata in the selected archive through
+    `workspace/symbol` and present the results through |vim.ui.select()|.
 
 :ZkBacklinks                                         *:ZkBacklinks*
     Put all incoming authored reference locations for the current Zettel into
     the quickfix list.
 
 :ZkDiagnostics                                       *:ZkDiagnostics*
-    Put diagnostics from the attached `zk` language server into quickfix.
+    Put diagnostics from the selected `zk` language server into quickfix.
 
 :ZkCheck                                             *:ZkCheck*
     Run `zk check` against saved archive state.
@@ -60,6 +71,15 @@ COMMANDS                                                        *zk-commands*
 
 :ZkRefresh                                           *:ZkRefresh*
     Refresh title decorations in the current buffer.
+
+:ZkSetArchive [path]                                 *:ZkSetArchive*
+    Select another fallback archive for this Neovim session. Invalid paths
+    leave the existing fallback and server unchanged. With no path, report
+    the current fallback.
+
+ZkFind, ZkNew, ZkCheck, ZkDiagnostics, and ZkRemove with an explicit ID work
+from any buffer when a fallback is configured. ZkBacklinks, ZkRefresh, and
+ZkRemove without an ID require a current Zettel.
 
 ==============================================================================
 MAPPINGS                                                        *zk-mappings*

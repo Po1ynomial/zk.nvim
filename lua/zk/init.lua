@@ -4,6 +4,11 @@ local namespace = vim.api.nvim_create_namespace("zk.references")
 local group
 local refresh_tokens = {}
 local configured = false
+local fallback_client_id
+local pending_clients = {}
+local switch_token = 0
+local schedule_refresh
+local set_mappings
 
 local defaults = {
   lsp_cmd = { "zk", "lsp" },
@@ -22,6 +27,7 @@ local defaults = {
 local config = vim.deepcopy(defaults)
 
 M.namespace = namespace
+M.archive = nil
 
 local function notify(message, level)
   vim.notify(message, level or vim.log.levels.INFO, { title = "zk" })
@@ -42,11 +48,178 @@ local function archive_root(bufnr)
   if path == "" then
     path = vim.uv.cwd()
   end
-  return vim.fs.root(path, "zk.toml")
+  local root = vim.fs.root(path, "zk.toml")
+  return root and (vim.uv.fs_realpath(root) or vim.fs.normalize(root)) or nil
 end
 
 local function zk_client(bufnr)
   return vim.iter(vim.lsp.get_clients({ bufnr = bufnr, name = "zk" })):next()
+end
+
+local function same_root(left, right)
+  if not left or not right then
+    return false
+  end
+  left = vim.uv.fs_realpath(left) or vim.fs.normalize(left)
+  right = vim.uv.fs_realpath(right) or vim.fs.normalize(right)
+  return left == right
+end
+
+local function zk_client_for_root(root)
+  return vim.iter(vim.lsp.get_clients({ name = "zk" })):find(function(client)
+    return same_root(client.root_dir, root)
+  end)
+end
+
+local function selected_root(bufnr)
+  return archive_root(bufnr) or M.archive
+end
+
+local function finish_client_start(root, client, error_message)
+  local waiters = pending_clients[root] or {}
+  pending_clients[root] = nil
+  for _, callback in ipairs(waiters) do
+    callback(client, error_message)
+  end
+end
+
+local function ensure_client(root, callback)
+  local client = zk_client_for_root(root)
+  if client and client.initialized then
+    callback(client, nil)
+    return client.id
+  end
+
+  pending_clients[root] = pending_clients[root] or {}
+  table.insert(pending_clients[root], callback)
+  if client then
+    return client.id
+  end
+
+  local client_id = vim.lsp.start({
+    name = "zk",
+    cmd = config.lsp_cmd,
+    cmd_cwd = root,
+    root_dir = root,
+    on_attach = function(attached_client, attached_bufnr)
+      if attached_client.name ~= "zk" then
+        return
+      end
+      set_mappings(attached_bufnr)
+      schedule_refresh(attached_bufnr)
+    end,
+    on_init = function(started_client)
+      finish_client_start(root, started_client, nil)
+    end,
+    on_exit = function(code, _, stopped_client_id)
+      if fallback_client_id == stopped_client_id then
+        fallback_client_id = nil
+      end
+      if pending_clients[root] then
+        vim.schedule(function()
+          finish_client_start(
+            root,
+            nil,
+            "zk language server exited before initialization with code " .. code
+          )
+        end)
+      end
+    end,
+  }, { attach = false })
+
+  if not client_id then
+    finish_client_start(root, nil, "could not start zk language server")
+    return nil
+  end
+  return client_id
+end
+
+local function with_selected_client(bufnr, callback)
+  local root = selected_root(bufnr)
+  if not root then
+    notify("no Zettelkasten archive found", vim.log.levels.ERROR)
+    return nil
+  end
+  return ensure_client(root, function(client, error_message)
+    if not client then
+      notify(error_message, vim.log.levels.ERROR)
+      return
+    end
+    callback(client, root)
+  end)
+end
+
+local function resolve_archive(value)
+  if type(value) ~= "string" or value == "" then
+    return nil, "archive path must be a non-empty string"
+  end
+  local expanded = vim.fn.expand(value)
+  local absolute = vim.fn.fnamemodify(expanded, ":p")
+  local root = vim.uv.fs_realpath(absolute)
+  if not root then
+    return nil, "archive path does not exist: " .. absolute
+  end
+  local required = {
+    { path = "zk.toml", kind = "file" },
+    { path = "zettel", kind = "directory" },
+    { path = "lib/zettel.typ", kind = "file" },
+  }
+  for _, item in ipairs(required) do
+    local path = vim.fs.joinpath(root, item.path)
+    local stat = vim.uv.fs_stat(path)
+    if not stat or stat.type ~= item.kind then
+      return nil, "archive is missing required " .. item.path .. ": " .. root
+    end
+  end
+  return root, nil
+end
+
+local function stop_fallback_client(client_id)
+  local client = client_id and vim.lsp.get_client_by_id(client_id) or nil
+  if client and vim.tbl_isempty(client.attached_buffers) then
+    client:stop()
+  end
+end
+
+local function select_fallback(value, announce)
+  local root, error_message = resolve_archive(value)
+  if not root then
+    notify(error_message, vim.log.levels.ERROR)
+    return nil
+  end
+
+  switch_token = switch_token + 1
+  local token = switch_token
+  local previous_client_id = fallback_client_id
+  ensure_client(root, function(client, start_error)
+    if token ~= switch_token then
+      if client and not same_root(client.root_dir, M.archive) then
+        stop_fallback_client(client.id)
+      end
+      return
+    end
+    if not client then
+      notify(start_error, vim.log.levels.ERROR)
+      return
+    end
+    M.archive = root
+    fallback_client_id = client.id
+    if previous_client_id ~= client.id then
+      stop_fallback_client(previous_client_id)
+    end
+    if announce then
+      notify("using Zettelkasten archive " .. root)
+    end
+  end)
+  return root
+end
+
+function M.set_archive(value)
+  if not value or value == "" then
+    notify(M.archive or "no fallback Zettelkasten archive configured")
+    return M.archive
+  end
+  return select_fallback(value, true)
 end
 
 local function execute(client, bufnr, command, arguments, callback, quiet)
@@ -184,7 +357,7 @@ function M.refresh(bufnr)
   end)
 end
 
-local function schedule_refresh(bufnr)
+schedule_refresh = function(bufnr)
   local token = (refresh_tokens[bufnr] or 0) + 1
   refresh_tokens[bufnr] = token
   vim.defer_fn(function()
@@ -222,6 +395,22 @@ local function show_document(location, client, source_bufnr)
   if vim.api.nvim_get_current_buf() == source_bufnr and vim.bo[source_bufnr].modified then
     vim.cmd.split()
   end
+  local word_ok, word = pcall(vim.fn.expand, "<cword>")
+  if not word_ok or word == "" then
+    local shown = vim.lsp.util.show_document(location, client.offset_encoding, {
+      focus = false,
+      reuse_win = true,
+    })
+    if shown then
+      local uri = location.uri or location.targetUri
+      local target_bufnr = uri and vim.uri_to_bufnr(uri) or nil
+      local target_window = target_bufnr and vim.fn.win_findbuf(target_bufnr)[1] or nil
+      if target_window then
+        vim.api.nvim_set_current_win(target_window)
+      end
+    end
+    return shown
+  end
   return vim.lsp.util.show_document(location, client.offset_encoding, {
     focus = true,
     reuse_win = true,
@@ -255,33 +444,30 @@ end
 
 function M.find(query)
   local bufnr = vim.api.nvim_get_current_buf()
-  local client = zk_client(bufnr)
-  if not client then
-    notify("zk language server is not attached", vim.log.levels.ERROR)
-    return
-  end
-  client:request("workspace/symbol", { query = query or "" }, function(error, symbols)
-    vim.schedule(function()
-      if error then
-        notify(error.message or tostring(error), vim.log.levels.ERROR)
-        return
-      end
-      if not symbols or vim.tbl_isempty(symbols) then
-        notify("no matching Zettel")
-        return
-      end
-      vim.ui.select(symbols, {
-        prompt = "Zettel",
-        format_item = function(symbol)
-          return symbol.name
-        end,
-      }, function(symbol)
-        if symbol then
-          show_document(symbol.location, client, bufnr)
+  return with_selected_client(bufnr, function(client)
+    client:request("workspace/symbol", { query = query or "" }, function(error, symbols)
+      vim.schedule(function()
+        if error then
+          notify(error.message or tostring(error), vim.log.levels.ERROR)
+          return
         end
+        if not symbols or vim.tbl_isempty(symbols) then
+          notify("no matching Zettel")
+          return
+        end
+        vim.ui.select(symbols, {
+          prompt = "Zettel",
+          format_item = function(symbol)
+            return symbol.name
+          end,
+        }, function(symbol)
+          if symbol then
+            show_document(symbol.location, client, bufnr)
+          end
+        end)
       end)
-    end)
-  end, bufnr)
+    end, bufnr)
+  end)
 end
 
 local function text_for_source(root, id)
@@ -345,20 +531,18 @@ function M.backlinks()
 end
 
 function M.diagnostics()
-  local client = zk_client(vim.api.nvim_get_current_buf())
-  if not client then
-    notify("zk language server is not attached", vim.log.levels.ERROR)
-    return
-  end
-  vim.diagnostic.setqflist({
-    namespace = vim.lsp.diagnostic.get_namespace(client.id),
-    open = true,
-    title = "Zettelkasten diagnostics",
-  })
+  local bufnr = vim.api.nvim_get_current_buf()
+  return with_selected_client(bufnr, function(client)
+    vim.diagnostic.setqflist({
+      namespace = vim.lsp.diagnostic.get_namespace(client.id),
+      open = true,
+      title = "Zettelkasten diagnostics",
+    })
+  end)
 end
 
 local function run_cli(bufnr, arguments, callback)
-  local root = archive_root(bufnr)
+  local root = selected_root(bufnr)
   if not root then
     notify("no Zettelkasten archive found", vim.log.levels.ERROR)
     return nil
@@ -407,7 +591,7 @@ function M.remove(id, callback)
     notify("no Zettel ID supplied", vim.log.levels.ERROR)
     return nil
   end
-  local root = archive_root(bufnr)
+  local root = selected_root(bufnr)
   if not root then
     notify("no Zettelkasten archive found", vim.log.levels.ERROR)
     return nil
@@ -444,7 +628,7 @@ function M.remove(id, callback)
   end)
 end
 
-local function set_mappings(bufnr)
+set_mappings = function(bufnr)
   if config.mappings == false then
     return
   end
@@ -475,19 +659,13 @@ local function attach(bufnr)
   if not id or not root then
     return
   end
-  vim.lsp.start({
-    name = "zk",
-    cmd = config.lsp_cmd,
-    cmd_cwd = root,
-    root_dir = root,
-    on_attach = function(client, attached_bufnr)
-      if client.name ~= "zk" then
-        return
-      end
-      set_mappings(attached_bufnr)
-      schedule_refresh(attached_bufnr)
-    end,
-  }, { bufnr = bufnr })
+  ensure_client(root, function(client, error_message)
+    if not client then
+      notify(error_message, vim.log.levels.ERROR)
+      return
+    end
+    vim.lsp.buf_attach_client(bufnr, client.id)
+  end)
 end
 
 local function create_commands()
@@ -508,6 +686,9 @@ local function create_commands()
   vim.api.nvim_create_user_command("ZkRefresh", function()
     M.refresh()
   end, { force = true })
+  vim.api.nvim_create_user_command("ZkSetArchive", function(command)
+    M.set_archive(command.args)
+  end, { nargs = "?", complete = "dir", force = true })
 end
 
 function M.setup(options)
@@ -541,6 +722,15 @@ function M.setup(options)
     end,
   })
   configured = true
+  if config.archive then
+    select_fallback(config.archive, false)
+  elseif M.archive then
+    switch_token = switch_token + 1
+    local previous_client_id = fallback_client_id
+    M.archive = nil
+    fallback_client_id = nil
+    stop_fallback_client(previous_client_id)
+  end
   for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_loaded(bufnr) and vim.bo[bufnr].filetype == "typst" then
       attach(bufnr)
