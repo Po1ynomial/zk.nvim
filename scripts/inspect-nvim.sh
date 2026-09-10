@@ -196,6 +196,8 @@ jq -e '
   and .successfulRemoval
   and .unsavedRemovalGuard
   and .newZettel
+  and .newCurrentWindow
+  and .completionFilter
   and .check
   and .tinymistAttached
   and .tinymistRoot

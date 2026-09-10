@@ -29,6 +29,38 @@ local config = vim.deepcopy(defaults)
 M.namespace = namespace
 M.archive = nil
 
+local function completion_line_before_cursor(context)
+  local line = context and context.line or nil
+  local cursor = context and context.cursor or nil
+  local bufnr = context and context.bufnr or vim.api.nvim_get_current_buf()
+  if not cursor then
+    cursor = vim.api.nvim_win_get_cursor(0)
+  end
+  if not line then
+    line = vim.api.nvim_buf_get_lines(bufnr, cursor[1] - 1, cursor[1], true)[1] or ""
+  end
+  return line:sub(1, cursor[2])
+end
+
+local function completion_client_name(item)
+  if item.client_name then
+    return item.client_name
+  end
+  local client_id = item.client_id or vim.tbl_get(item, "user_data", "nvim", "lsp", "client_id")
+  local client = client_id and vim.lsp.get_client_by_id(client_id) or nil
+  return client and client.name or nil
+end
+
+function M.filter_completion_items(context, items)
+  local before = completion_line_before_cursor(context)
+  if not before:match("^#category%.[%w_-]*$") then
+    return items
+  end
+  return vim.tbl_filter(function(item)
+    return completion_client_name(item) == "zk"
+  end, items)
+end
+
 local function notify(message, level)
   vim.notify(message, level or vim.log.levels.INFO, { title = "zk" })
 end
@@ -384,11 +416,8 @@ local function cursor_on_reference()
   end
 end
 
-local function edit_path(path, source_bufnr)
-  if vim.api.nvim_get_current_buf() == source_bufnr and vim.bo[source_bufnr].modified then
-    vim.cmd.split()
-  end
-  vim.cmd.edit(vim.fn.fnameescape(path))
+local function edit_path(path)
+  vim.cmd("hide edit " .. vim.fn.fnameescape(path))
 end
 
 local function show_document(location, client, source_bufnr)
@@ -576,7 +605,7 @@ function M.new(callback)
       notify(vim.trim(result.stderr), vim.log.levels.ERROR)
     else
       local path = vim.fs.joinpath(root, vim.trim(result.stdout))
-      edit_path(path, bufnr)
+      edit_path(path)
     end
     if callback then
       callback(result)

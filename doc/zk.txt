@@ -6,7 +6,8 @@ CONTENTS                                                        *zk-contents*
 1. Setup .......................................................... |zk-setup|
 2. Commands ..................................................... |zk-commands|
 3. Mappings ..................................................... |zk-mappings|
-4. Decorations ............................................... |zk-decorations|
+4. Completion ................................................. |zk-completion|
+5. Decorations ............................................... |zk-decorations|
 
 ==============================================================================
 SETUP                                                              *zk-setup*
@@ -64,7 +65,8 @@ COMMANDS                                                        *zk-commands*
     Run `zk check` against saved archive state.
 
 :ZkNew                                               *:ZkNew*
-    Run `zk new`, then edit the generated Zettel.
+    Run `zk new`, then edit the generated Zettel in the current window. A
+    modified prior buffer remains hidden with its changes intact.
 
 :ZkRemove [ID]                                       *:ZkRemove*
     Run guarded removal for ID, or for the current Zettel when ID is omitted.
@@ -94,13 +96,40 @@ The defaults are buffer-local:
   <leader>zn      Create a Zettel.
 
 ==============================================================================
+COMPLETION                                                    *zk-completion*
+
+After `@`, numeric text completes ID prefixes and other text searches Zettel
+titles without regard to case. Accepting an item replaces the temporary query
+with its ten-digit ID.
+
+`zk lsp` completes direct `#category.` fields with keys from the saved
+`#let category = (...)` dictionary in `lib/zettel.typ`. LSP cannot prevent
+Tinymist from returning items for the same request. Completion frontends can
+use `require("zk").filter_completion_items` to retain only ZK items in this
+context.
+
+For Blink, compose the filter into the source configuration: >lua
+
+  require("blink.cmp").setup({
+    sources = {
+      transform_items = function(ctx, items)
+        return require("zk").filter_completion_items(ctx, items)
+      end,
+    },
+  })
+<
+The helper leaves completion items unchanged outside direct category context.
+The ZK plugin does not require or configure Blink.
+
+==============================================================================
 DECORATIONS                                                  *zk-decorations*
 
 Resolved `@ID` ranges are concealed and replaced with target-title virtual
 text. Missing targets use the `ZkMissingReference` highlight. The raw source
 remains unchanged and becomes visible according to Neovim's conceal rules.
 
-Decorations come from `zk lsp` queries. The Lua plugin does not parse Typst or
-keep an archive graph.
+Decorations come from `zk lsp` queries. The Lua plugin recognizes narrow
+source contexts for routing but does not extract metadata or keep an archive
+graph.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

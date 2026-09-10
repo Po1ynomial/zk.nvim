@@ -20,6 +20,21 @@ zk.setup({
   debounce_ms = 10,
 })
 
+local completion_items = {
+  { label = "thoughts", client_name = "zk" },
+  { label = "len", client_name = "tinymist" },
+}
+local category_items = zk.filter_completion_items({
+  line = "#category.th",
+  cursor = { 1, 12 },
+}, completion_items)
+assert(#category_items == 1 and category_items[1].client_name == "zk")
+local ordinary_items = zk.filter_completion_items({
+  line = "#text.",
+  cursor = { 1, 6 },
+}, completion_items)
+assert(#ordinary_items == 2, "completion filter changed ordinary Typst completion")
+
 for _, command in ipairs({
   "ZkFind",
   "ZkBacklinks",
@@ -247,6 +262,11 @@ assert(removed.code == 0)
 assert(not vim.uv.fs_stat(removable_path), "removable Zettel still exists")
 
 local created
+vim.api.nvim_set_current_buf(source_buf)
+vim.api.nvim_buf_set_lines(source_buf, -1, -1, true, { "Unsaved before creating another Zettel." })
+assert(vim.bo[source_buf].modified, "source buffer is not modified before creation")
+local creation_window = vim.api.nvim_get_current_win()
+local window_count = #vim.api.nvim_list_wins()
 zk.new(function(result)
   created = result
 end)
@@ -257,6 +277,10 @@ assert(
   "Zettel creation did not finish"
 )
 assert(created.code == 0)
+assert(vim.api.nvim_get_current_win() == creation_window, "ZkNew changed the current window")
+assert(#vim.api.nvim_list_wins() == window_count, "ZkNew opened another window")
+assert(vim.api.nvim_buf_is_loaded(source_buf), "ZkNew unloaded the modified source buffer")
+assert(vim.bo[source_buf].modified, "ZkNew discarded source-buffer changes")
 local created_path = vim.api.nvim_buf_get_name(0)
 assert(created_path:match("/zettel/%d%d%d%d%d%d%d%d%d%d%.typ$"))
 assert(vim.uv.fs_stat(created_path), "created Zettel is missing")
@@ -287,6 +311,8 @@ local report = {
   successfulRemoval = true,
   unsavedRemovalGuard = true,
   newZettel = true,
+  newCurrentWindow = true,
+  completionFilter = true,
   check = true,
   tinymistAttached = true,
   tinymistRoot = true,

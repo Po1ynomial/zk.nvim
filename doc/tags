@@ -7,6 +7,7 @@
 :ZkRemove	zk.txt	/*:ZkRemove*
 :ZkSetArchive	zk.txt	/*:ZkSetArchive*
 zk-commands	zk.txt	/*zk-commands*
+zk-completion	zk.txt	/*zk-completion*
 zk-contents	zk.txt	/*zk-contents*
 zk-decorations	zk.txt	/*zk-decorations*
 zk-mappings	zk.txt	/*zk-mappings*
