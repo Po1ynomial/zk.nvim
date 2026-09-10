@@ -177,6 +177,9 @@ assert(
   definition_response and definition_response.result,
   vim.inspect(definition_error or definition_response)
 )
+assert(vim.bo[source_buf].modified, "source buffer is not modified before definition")
+local definition_window = vim.api.nvim_get_current_win()
+local definition_window_count = #vim.api.nvim_list_wins()
 local definition_requested = zk.definition()
 assert(definition_requested, "context definition request was not sent")
 local navigated = vim.wait(5000, function()
@@ -192,6 +195,13 @@ if not navigated then
   end, vim.api.nvim_list_wins())
   error("context definition did not open the target: " .. vim.inspect(windows))
 end
+assert(
+  vim.api.nvim_get_current_win() == definition_window,
+  "ZK definition changed the current window"
+)
+assert(#vim.api.nvim_list_wins() == definition_window_count, "ZK definition opened another window")
+assert(vim.api.nvim_buf_is_loaded(source_buf), "definition unloaded the modified source buffer")
+assert(vim.bo[source_buf].modified, "definition discarded source-buffer changes")
 local target_buf = vim.api.nvim_get_current_buf()
 assert(
   vim.wait(5000, function()
@@ -209,6 +219,14 @@ assert(
 )
 local backlink = vim.fn.getqflist()[1]
 assert(vim.fs.normalize(vim.api.nvim_buf_get_name(backlink.bufnr)) == vim.fs.normalize(source_path))
+assert(
+  vim.wait(5000, function()
+    return vim.iter(vim.api.nvim_list_wins()):any(function(window)
+      return vim.bo[vim.api.nvim_win_get_buf(window)].buftype == "quickfix"
+    end)
+  end, 20),
+  "backlink quickfix window did not open"
+)
 vim.cmd.cclose()
 vim.api.nvim_set_current_buf(target_buf)
 
@@ -217,6 +235,10 @@ vim.ui.select = function(items, _, callback)
   selected = items[1]
   callback(items[1])
 end
+vim.api.nvim_buf_set_lines(target_buf, -1, -1, true, { "Unsaved before finding another Zettel." })
+assert(vim.bo[target_buf].modified, "target buffer is not modified before search")
+local search_window = vim.api.nvim_get_current_win()
+local search_window_count = #vim.api.nvim_list_wins()
 zk.find("Source note")
 assert(
   vim.wait(5000, function()
@@ -225,6 +247,11 @@ assert(
   end, 20),
   "archive search did not open the selected Zettel"
 )
+assert(vim.api.nvim_get_current_win() == search_window, "ZkFind changed the current window")
+assert(#vim.api.nvim_list_wins() == search_window_count, "ZkFind opened another window")
+assert(vim.api.nvim_buf_is_loaded(target_buf), "ZkFind unloaded the modified target buffer")
+assert(vim.bo[target_buf].modified, "ZkFind discarded target-buffer changes")
+vim.bo[target_buf].modified = false
 
 local blocked
 zk.remove("2603231411", function(result)
@@ -305,6 +332,7 @@ local report = {
   decorations = true,
   diagnostics = true,
   contextDefinition = true,
+  currentWindowNavigation = true,
   backlinks = true,
   search = true,
   blockedRemoval = true,

@@ -190,6 +190,7 @@ jq -e '
   and .decorations
   and .diagnostics
   and .contextDefinition
+  and .currentWindowNavigation
   and .backlinks
   and .search
   and .blockedRemoval

@@ -52,7 +52,8 @@ COMMANDS                                                        *zk-commands*
 
 :ZkFind [query]                                      *:ZkFind*
     Search live Zettel metadata in the selected archive through
-    `workspace/symbol` and present the results through |vim.ui.select()|.
+    `workspace/symbol` and present the results through |vim.ui.select()|. Open
+    the selection in the window where the search began.
 
 :ZkBacklinks                                         *:ZkBacklinks*
     Put all incoming authored reference locations for the current Zettel into
@@ -65,8 +66,9 @@ COMMANDS                                                        *zk-commands*
     Run `zk check` against saved archive state.
 
 :ZkNew                                               *:ZkNew*
-    Run `zk new`, then edit the generated Zettel in the current window. A
-    modified prior buffer remains hidden with its changes intact.
+    Run `zk new`, then edit the generated Zettel in the window where the
+    command began. A modified prior buffer remains hidden with its changes
+    intact.
 
 :ZkRemove [ID]                                       *:ZkRemove*
     Run guarded removal for ID, or for the current Zettel when ID is omitted.
@@ -94,6 +96,10 @@ The defaults are buffer-local:
   <leader>zb      Show backlinks.
   <leader>zd      Show Zettelkasten diagnostics.
   <leader>zn      Create a Zettel.
+
+ZK creation, search selection, and definition navigation replace the buffer in
+the invocation window. They preserve unsaved prior buffers as hidden and do
+not create splits.
 
 ==============================================================================
 COMPLETION                                                    *zk-completion*

@@ -49,6 +49,8 @@ vim.ui.select = function(items, _, callback)
   selected = items[1]
   callback(items[1])
 end
+local search_window = vim.api.nvim_get_current_win()
+local search_window_count = #vim.api.nvim_list_wins()
 zk.find("Personal note")
 assert(
   vim.wait(5000, function()
@@ -58,6 +60,8 @@ assert(
   end, 20),
   "global search did not use the configured fallback"
 )
+assert(vim.api.nvim_get_current_win() == search_window, "ZkFind changed the current window")
+assert(#vim.api.nvim_list_wins() == search_window_count, "ZkFind opened another window")
 local personal_buf = vim.api.nvim_get_current_buf()
 assert(
   vim.wait(5000, function()

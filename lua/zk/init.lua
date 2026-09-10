@@ -416,38 +416,64 @@ local function cursor_on_reference()
   end
 end
 
-local function edit_path(path)
-  vim.cmd("hide edit " .. vim.fn.fnameescape(path))
+local function opening_window(window)
+  return vim.api.nvim_win_is_valid(window) and window or vim.api.nvim_get_current_win()
 end
 
-local function show_document(location, client, source_bufnr)
-  if vim.api.nvim_get_current_buf() == source_bufnr and vim.bo[source_bufnr].modified then
-    vim.cmd.split()
+local function edit_path(path, window)
+  window = opening_window(window)
+  vim.api.nvim_win_call(window, function()
+    vim.cmd("hide edit " .. vim.fn.fnameescape(path))
+  end)
+  vim.api.nvim_set_current_win(window)
+end
+
+local function show_document(location, client, window)
+  local uri = location.uri or location.targetUri
+  if not uri then
+    return false
   end
-  local word_ok, word = pcall(vim.fn.expand, "<cword>")
-  if not word_ok or word == "" then
-    local shown = vim.lsp.util.show_document(location, client.offset_encoding, {
-      focus = false,
-      reuse_win = true,
-    })
-    if shown then
-      local uri = location.uri or location.targetUri
-      local target_bufnr = uri and vim.uri_to_bufnr(uri) or nil
-      local target_window = target_bufnr and vim.fn.win_findbuf(target_bufnr)[1] or nil
-      if target_window then
-        vim.api.nvim_set_current_win(target_window)
-      end
+  window = opening_window(window)
+  local navigation = vim.api.nvim_win_call(window, function()
+    local word_ok, word = pcall(vim.fn.expand, "<cword>")
+    vim.cmd("normal! m'")
+    return {
+      tagname = word_ok and word ~= "" and word or vim.fs.basename(vim.uri_to_fname(uri)),
+      from = {
+        vim.api.nvim_get_current_buf(),
+        vim.fn.line("."),
+        vim.fn.col("."),
+        0,
+      },
+    }
+  end)
+  vim.fn.settagstack(window, { items = { navigation } }, "t")
+
+  local target_bufnr = vim.uri_to_bufnr(uri)
+  vim.bo[target_bufnr].buflisted = true
+  vim.api.nvim_win_set_buf(window, target_bufnr)
+  vim.api.nvim_set_current_win(window)
+  local range = location.range or location.targetSelectionRange
+  if range then
+    local line = vim.api.nvim_buf_get_lines(
+      target_bufnr,
+      range.start.line,
+      range.start.line + 1,
+      false
+    )[1] or ""
+    local column = range.start.character
+    if column > 0 then
+      column = vim.str_byteindex(line, client.offset_encoding, column, false)
     end
-    return shown
+    vim.api.nvim_win_set_cursor(window, { range.start.line + 1, column })
+    vim.cmd("normal! zv")
   end
-  return vim.lsp.util.show_document(location, client.offset_encoding, {
-    focus = true,
-    reuse_win = true,
-  })
+  return true
 end
 
 function M.definition()
   local bufnr = vim.api.nvim_get_current_buf()
+  local window = vim.api.nvim_get_current_win()
   local client = zk_client(bufnr)
   if not client or not cursor_on_reference() then
     vim.lsp.buf.definition()
@@ -464,7 +490,7 @@ function M.definition()
       if vim.islist(result) then
         location = result[1]
       end
-      if location and not show_document(location, client, bufnr) then
+      if location and not show_document(location, client, window) then
         notify("could not open Zettel definition", vim.log.levels.ERROR)
       end
     end)
@@ -473,6 +499,7 @@ end
 
 function M.find(query)
   local bufnr = vim.api.nvim_get_current_buf()
+  local window = vim.api.nvim_get_current_win()
   return with_selected_client(bufnr, function(client)
     client:request("workspace/symbol", { query = query or "" }, function(error, symbols)
       vim.schedule(function()
@@ -491,7 +518,7 @@ function M.find(query)
           end,
         }, function(symbol)
           if symbol then
-            show_document(symbol.location, client, bufnr)
+            show_document(symbol.location, client, window)
           end
         end)
       end)
@@ -600,12 +627,13 @@ end
 
 function M.new(callback)
   local bufnr = vim.api.nvim_get_current_buf()
+  local window = vim.api.nvim_get_current_win()
   return run_cli(bufnr, { "new" }, function(result, root)
     if result.code ~= 0 then
       notify(vim.trim(result.stderr), vim.log.levels.ERROR)
     else
       local path = vim.fs.joinpath(root, vim.trim(result.stdout))
-      edit_path(path)
+      edit_path(path, window)
     end
     if callback then
       callback(result)
