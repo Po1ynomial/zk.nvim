@@ -14,6 +14,13 @@ SETUP                                                              *zk-setup*
 
 The plugin requires Neovim 0.12 or newer and the `zk` executable.
 
+To initialize a new archive with the bundled archive-local agent skills: >sh
+
+  zk init --agent-skills /path/to/archive
+<
+Ordinary `zk init` does not create `.agents`. Installed skills are user-owned,
+and later `zk` commands leave them untouched.
+
 Configure a personal archive to make archive commands available from every
 buffer: >lua
 
