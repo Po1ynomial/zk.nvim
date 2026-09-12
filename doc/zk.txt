@@ -50,6 +50,10 @@ Tinymist can remain attached to the same Typst buffer. The plugin makes
 `zk.toml` a higher-priority Tinymist root marker than `.git`, so imports from
 `../lib/` work even when the archive is not a Git repository.
 
+The plugin requires ZK editor protocol version 1. It validates the descriptor
+reported by `zk lsp` during initialization and rejects missing or unsupported
+versions. The executable and plugin have independent release versions.
+
 Set `decorations = false` to disable title extmarks. Set `mappings = false` to
 disable all default mappings. Individual mapping values can also be replaced
 or set to `false`.

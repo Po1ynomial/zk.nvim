@@ -14,6 +14,31 @@ vim.opt.runtimepath:append(vim.fs.joinpath(repo, "after"))
 vim.cmd("filetype plugin on")
 vim.lsp.enable("tinymist")
 local zk = require("zk")
+local protocol = require("zk.protocol")
+local valid_protocol, protocol_error = protocol.validate({
+  capabilities = {
+    experimental = {
+      zk = {
+        protocolVersion = 1,
+        features = { archiveQueries = true },
+      },
+    },
+  },
+})
+assert(valid_protocol and not protocol_error and valid_protocol.version == 1)
+local missing_protocol, missing_protocol_error = protocol.validate({ capabilities = {} })
+assert(not missing_protocol and missing_protocol_error:find("did not report", 1, true))
+local future_protocol, future_protocol_error = protocol.validate({
+  capabilities = {
+    experimental = {
+      zk = {
+        protocolVersion = 2,
+        features = {},
+      },
+    },
+  },
+})
+assert(not future_protocol and future_protocol_error:find("unsupported", 1, true))
 zk.setup({
   lsp_cmd = { binary, "lsp" },
   cli_cmd = { binary },
@@ -58,6 +83,9 @@ assert(
 )
 local client = vim.lsp.get_clients({ bufnr = source_buf, name = "zk" })[1]
 assert(client)
+assert(client.config.zk_protocol.version == 1)
+assert(client.config.zk_protocol.features.archiveQueries)
+assert(client.config.zk_protocol.features.referenceTitleDecorations)
 local definition_mapping = vim.fn.maparg("gd", "n", false, true)
 assert(definition_mapping.buffer == 1 and type(definition_mapping.callback) == "function")
 assert(

@@ -1,4 +1,5 @@
 local M = {}
+local protocol = require("zk.protocol")
 
 local namespace = vim.api.nvim_create_namespace("zk.references")
 local group
@@ -138,9 +139,18 @@ local function ensure_client(root, callback)
         return
       end
       set_mappings(attached_bufnr)
-      schedule_refresh(attached_bufnr)
+      if protocol.has(attached_client, "referenceTitleDecorations") then
+        schedule_refresh(attached_bufnr)
+      end
     end,
-    on_init = function(started_client)
+    on_init = function(started_client, initialize_result)
+      local descriptor, protocol_error = protocol.validate(initialize_result)
+      if not descriptor then
+        finish_client_start(root, nil, protocol_error)
+        started_client:stop()
+        return
+      end
+      started_client.config.zk_protocol = descriptor
       finish_client_start(root, started_client, nil)
     end,
     on_exit = function(code, _, stopped_client_id)
