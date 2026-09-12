@@ -17,7 +17,7 @@ case ${1:-} in
     ;;
 esac
 
-for command in cargo jq nvim tinymist; do
+for command in jq nvim tinymist; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'required command not found: %s\n' "$command" >&2
     exit 1
@@ -25,6 +25,15 @@ for command in cargo jq nvim tinymist; do
 done
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+zk_bin=${ZK_BIN:-}
+if [[ -z $zk_bin ]]; then
+  zk_bin=$(command -v zk || true)
+fi
+if [[ -z $zk_bin || ! -x $zk_bin ]]; then
+  printf 'set ZK_BIN to a compatible zk executable\n' >&2
+  exit 1
+fi
+zk_bin=$(cd "$(dirname "$zk_bin")" && pwd)/$(basename "$zk_bin")
 temp_root=${TMPDIR:-/tmp}
 workspace=$(mktemp -d "${temp_root%/}/zk-inspect-nvim.XXXXXX")
 archive="$workspace/archive"
@@ -48,9 +57,7 @@ cleanup() {
 trap cleanup EXIT
 
 cd "$repo_root"
-printf 'building zk and creating Neovim fixture archive...\n' >&2
-cargo build --quiet
-zk_bin="${CARGO_TARGET_DIR:-$repo_root/target}/debug/zk"
+printf 'using %s and creating Neovim fixture archive...\n' "$zk_bin" >&2
 "$zk_bin" init "$archive" >/dev/null
 mkdir -p "$tinymist_runtime/lsp"
 cat >"$tinymist_runtime/lsp/tinymist.lua" <<'LUA'
