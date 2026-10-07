@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Load tool pins
+        shell: bash
+        run: |
+          while IFS='=' read -r name value; do
+            [[ $name =~ ^[A-Z][A-Z0-9_]*$ ]] || continue
+            printf '%s=%s\n' "$name" "$value" >> "$GITHUB_ENV"
+          done < scripts/versions.env
+
+      - name: Install just
+        uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@${{ env.JUST_VERSION }}
+          fallback: none
+
+      - name: Install check tools
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/install-ci-tools.sh checks
+
+      - name: Run local check recipes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: just check
+
+      - name: Upload failure fixtures and logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: checks-failures
+          path: .test-results/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
+  integration:
+    name: Integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Load tool pins
+        shell: bash
+        run: |
+          while IFS='=' read -r name value; do
+            [[ $name =~ ^[A-Z][A-Z0-9_]*$ ]] || continue
+            printf '%s=%s\n' "$name" "$value" >> "$GITHUB_ENV"
+          done < scripts/versions.env
+
+      - name: Install just
+        uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@${{ env.JUST_VERSION }}
+          fallback: none
+
+      - name: Install editor and Tinymist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/install-ci-tools.sh integration
+
+      - name: Check out pinned public engine
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Po1ynomial/zk-typst
+          ref: ${{ env.ZK_REV }}
+          path: .deps/zk
+          persist-credentials: false
+
+      - name: Install engine Rust toolchain
+        working-directory: .deps/zk
+        run: rustup show active-toolchain
+
+      - name: Cache engine build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: .deps/zk -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build engine
+        working-directory: .deps/zk
+        run: cargo build --locked --bin zk
+
+      - name: Run integration recipes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export ZK_BIN="$PWD/.deps/zk/target/debug/zk"
+          just test-integration
+          just test-tinymist
+
+      - name: Upload failure fixtures and logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: integration-failures
+          path: .test-results/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7

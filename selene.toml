@@ -1,0 +1,5 @@
+std = "lua51+vim"
+
+[lints]
+# LSP positions and configuration tables legitimately mix array and keyed fields.
+mixed_table = "allow"
