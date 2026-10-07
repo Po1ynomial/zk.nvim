@@ -1,6 +1,6 @@
 # ZK editor protocol
 
-Status: accepted
+Status: superseded by [Protocol-2 client](protocol-2-client.md). The protocol-1 decision below is retained as history.
 
 ## Decision
 

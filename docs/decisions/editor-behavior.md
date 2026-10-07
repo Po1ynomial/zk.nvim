@@ -1,6 +1,6 @@
 # Editor behavior
 
-Status: accepted
+Status: superseded by [Protocol-2 client](protocol-2-client.md). The earlier category-completion ownership below is retained as history; archive selection and current-window navigation remain in the replacement.
 
 ## Decision
 

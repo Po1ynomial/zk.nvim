@@ -30,36 +30,9 @@ local config = vim.deepcopy(defaults)
 M.namespace = namespace
 M.archive = nil
 
-local function completion_line_before_cursor(context)
-  local line = context and context.line or nil
-  local cursor = context and context.cursor or nil
-  local bufnr = context and context.bufnr or vim.api.nvim_get_current_buf()
-  if not cursor then
-    cursor = vim.api.nvim_win_get_cursor(0)
-  end
-  if not line then
-    line = vim.api.nvim_buf_get_lines(bufnr, cursor[1] - 1, cursor[1], true)[1] or ""
-  end
-  return line:sub(1, cursor[2])
-end
-
-local function completion_client_name(item)
-  if item.client_name then
-    return item.client_name
-  end
-  local client_id = item.client_id or vim.tbl_get(item, "user_data", "nvim", "lsp", "client_id")
-  local client = client_id and vim.lsp.get_client_by_id(client_id) or nil
-  return client and client.name or nil
-end
-
-function M.filter_completion_items(context, items)
-  local before = completion_line_before_cursor(context)
-  if not before:match("^#category%.[%w_-]*$") then
-    return items
-  end
-  return vim.tbl_filter(function(item)
-    return completion_client_name(item) == "zk"
-  end, items)
+-- Deprecated compatibility helper. Dictionary-member completion belongs to Tinymist.
+function M.filter_completion_items(_, items)
+  return items
 end
 
 local function notify(message, level)
@@ -71,6 +44,11 @@ local function zettel_id(bufnr)
   local name = vim.fs.basename(path)
   local id = name:match("^(%d%d%d%d%d%d%d%d%d%d)%.typ$")
   if not id or vim.fs.basename(vim.fs.dirname(path)) ~= "zettel" then
+    return nil
+  end
+  local root = vim.fs.root(path, "zk.toml")
+  local parent = vim.uv.fs_realpath(vim.fs.dirname(path))
+  if not root or parent ~= vim.fs.joinpath(vim.uv.fs_realpath(root) or root, "zettel") then
     return nil
   end
   return id
@@ -118,7 +96,7 @@ end
 
 local function ensure_client(root, callback)
   local client = zk_client_for_root(root)
-  if client and client.initialized then
+  if client and client.initialized and client.config.zk_protocol then
     callback(client, nil)
     return client.id
   end
@@ -129,17 +107,27 @@ local function ensure_client(root, callback)
     return client.id
   end
 
+  local capabilities = vim.lsp.protocol.make_client_capabilities()
+  -- Correct closed-file state requires watching even on platforms where Nvim defaults it off.
+  capabilities.workspace.didChangeWatchedFiles = {
+    dynamicRegistration = true,
+    relativePatternSupport = true,
+  }
   local client_id = vim.lsp.start({
     name = "zk",
-    cmd = config.lsp_cmd,
+    cmd = vim.list_extend(vim.deepcopy(config.lsp_cmd), { "--archive", root }),
     cmd_cwd = root,
     root_dir = root,
+    capabilities = capabilities,
     on_attach = function(attached_client, attached_bufnr)
       if attached_client.name ~= "zk" then
         return
       end
       set_mappings(attached_bufnr)
-      if protocol.has(attached_client, "referenceTitleDecorations") then
+      if
+        protocol.has(attached_client, "archiveQueries")
+        and protocol.has(attached_client, "referenceTitleDecorations")
+      then
         schedule_refresh(attached_bufnr)
       end
     end,
@@ -151,6 +139,9 @@ local function ensure_client(root, callback)
         return
       end
       started_client.config.zk_protocol = descriptor
+      if not protocol.has(started_client, "referenceCompletion") then
+        started_client.server_capabilities.completionProvider = nil
+      end
       finish_client_start(root, started_client, nil)
     end,
     on_exit = function(code, _, stopped_client_id)
@@ -204,7 +195,6 @@ local function resolve_archive(value)
   local required = {
     { path = "zk.toml", kind = "file" },
     { path = "zettel", kind = "directory" },
-    { path = "lib/zettel.typ", kind = "file" },
   }
   for _, item in ipairs(required) do
     local path = vim.fs.joinpath(root, item.path)
@@ -265,6 +255,16 @@ function M.set_archive(value)
 end
 
 local function execute(client, bufnr, command, arguments, callback, quiet)
+  if
+    not protocol.has(client, "archiveQueries")
+    or not client:supports_method("workspace/executeCommand")
+  then
+    if not quiet then
+      notify("zk language server does not support archive queries", vim.log.levels.ERROR)
+    end
+    callback(nil, { message = "archive queries unavailable" })
+    return
+  end
   client:request("workspace/executeCommand", {
     command = command,
     arguments = arguments,
@@ -277,7 +277,15 @@ local function execute(client, bufnr, command, arguments, callback, quiet)
         callback(nil, error)
         return
       end
-      callback(result, nil)
+      local data, schema_error = protocol.unwrap(result)
+      if schema_error then
+        if not quiet then
+          notify(schema_error, vim.log.levels.ERROR)
+        end
+        callback(nil, { message = schema_error })
+        return
+      end
+      callback(data, nil)
     end)
   end, bufnr)
 end
@@ -361,7 +369,12 @@ function M.refresh(bufnr)
   end
   local id = zettel_id(bufnr)
   local client = zk_client(bufnr)
-  if not id or not client then
+  if
+    not id
+    or not client
+    or not protocol.has(client, "archiveQueries")
+    or not protocol.has(client, "referenceTitleDecorations")
+  then
     vim.api.nvim_buf_clear_namespace(bufnr, namespace, 0, -1)
     return
   end
@@ -387,7 +400,7 @@ function M.refresh(bufnr)
     end
     for target in pairs(targets) do
       execute(client, bufnr, "zk.queryNode", { target }, function(node)
-        if node and node.title then
+        if node and type(node.title) == "table" then
           titles[target] = node.title.text
         end
         pending = pending - 1
@@ -485,7 +498,11 @@ function M.definition()
   local bufnr = vim.api.nvim_get_current_buf()
   local window = vim.api.nvim_get_current_win()
   local client = zk_client(bufnr)
-  if not client or not cursor_on_reference() then
+  if
+    not client
+    or not client:supports_method("textDocument/definition")
+    or not cursor_on_reference()
+  then
     vim.lsp.buf.definition()
     return
   end
@@ -511,6 +528,10 @@ function M.find(query)
   local bufnr = vim.api.nvim_get_current_buf()
   local window = vim.api.nvim_get_current_win()
   return with_selected_client(bufnr, function(client)
+    if not client:supports_method("workspace/symbol") then
+      notify("zk language server does not support workspace search", vim.log.levels.ERROR)
+      return
+    end
     client:request("workspace/symbol", { query = query or "" }, function(error, symbols)
       vim.schedule(function()
         if error then
@@ -599,11 +620,26 @@ end
 function M.diagnostics()
   local bufnr = vim.api.nvim_get_current_buf()
   return with_selected_client(bufnr, function(client)
-    vim.diagnostic.setqflist({
+    local diagnostics = vim.deepcopy(vim.diagnostic.get(nil, {
       namespace = vim.lsp.diagnostic.get_namespace(client.id),
-      open = true,
-      title = "Zettelkasten diagnostics",
+    }))
+    for _, diagnostic in ipairs(diagnostics) do
+      local data = vim.tbl_get(diagnostic, "user_data", "lsp", "data")
+      local field = ""
+      if
+        type(data) == "table"
+        and data.schema_version == protocol.data_schema_version
+        and type(data.field) == "string"
+      then
+        field = " [" .. data.field .. "]"
+      end
+      diagnostic.message = tostring(diagnostic.code or "zk") .. field .. ": " .. diagnostic.message
+    end
+    vim.fn.setqflist({}, " ", {
+      title = "Live Zettelkasten diagnostics for open notes",
+      items = vim.diagnostic.toqflist(diagnostics),
     })
+    vim.cmd.copen()
   end)
 end
 
@@ -613,7 +649,8 @@ local function run_cli(bufnr, arguments, callback)
     notify("no Zettelkasten archive found", vim.log.levels.ERROR)
     return nil
   end
-  local command = vim.list_extend(vim.deepcopy(config.cli_cmd), arguments)
+  local command = vim.list_extend(vim.deepcopy(config.cli_cmd), { "--archive", root })
+  vim.list_extend(command, arguments)
   return vim.system(command, { cwd = root, text = true }, function(result)
     vim.schedule(function()
       if callback then
@@ -625,14 +662,98 @@ local function run_cli(bufnr, arguments, callback)
   end)
 end
 
-function M.check(callback)
-  return run_cli(vim.api.nvim_get_current_buf(), { "check" }, function(result)
-    local output = vim.trim((result.stdout or "") .. (result.stderr or ""))
-    notify(output, result.code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR)
-    if callback then
-      callback(result)
+local function notify_file(root, path, change_type)
+  local client = zk_client_for_root(root)
+  if client and client.initialized and client.config.zk_protocol then
+    client:notify("workspace/didChangeWatchedFiles", {
+      changes = { { uri = vim.uri_from_fname(path), type = change_type } },
+    })
+    for bufnr in pairs(client.attached_buffers) do
+      schedule_refresh(bufnr)
     end
-  end)
+  end
+end
+
+local function check_items(root, diagnostics)
+  if not vim.islist(diagnostics) then
+    return nil, "zk check returned an invalid diagnostic list"
+  end
+  local items = {}
+  for _, diagnostic in ipairs(diagnostics) do
+    if
+      type(diagnostic) ~= "table"
+      or type(diagnostic.path) ~= "string"
+      or type(diagnostic.message) ~= "string"
+      or type(diagnostic.code) ~= "string"
+      or (diagnostic.severity ~= "error" and diagnostic.severity ~= "warning")
+    then
+      return nil, "zk check returned an invalid diagnostic"
+    end
+    local path = vim.fs.joinpath(root, diagnostic.path)
+    local row, col = 0, 0
+    if type(diagnostic.range) == "table" then
+      -- CLI ranges address saved bytes, never the potentially modified buffer.
+      local file = io.open(path, "rb")
+      if file then
+        local text = file:read("*a")
+        file:close()
+        if type(diagnostic.range.start) == "number" then
+          row, col = byte_position(text, diagnostic.range.start)
+        end
+      end
+    end
+    local field = type(diagnostic.field) == "string" and (" [" .. diagnostic.field .. "]") or ""
+    table.insert(items, {
+      filename = path,
+      lnum = (row or 0) + 1,
+      col = (col or 0) + 1,
+      type = diagnostic.severity == "error" and "E" or "W",
+      text = diagnostic.code .. field .. ": " .. diagnostic.message,
+      user_data = diagnostic,
+    })
+  end
+  return items, nil
+end
+
+function M.check(callback)
+  return run_cli(
+    vim.api.nvim_get_current_buf(),
+    { "check", "--format", "json" },
+    function(result, root)
+      local ok, envelope = pcall(vim.json.decode, result.stdout or "")
+      local diagnostics, schema_error
+      if ok then
+        diagnostics, schema_error = protocol.unwrap(envelope)
+      end
+      local items, data_error
+      if diagnostics and (result.code == 0 or result.code == 1) then
+        items, data_error = check_items(root, diagnostics)
+      end
+      if items then
+        vim.fn.setqflist({}, " ", { title = "Saved Zettelkasten check", items = items })
+        if #items > 0 then
+          vim.cmd.copen()
+        else
+          notify("saved archive check passed")
+        end
+        if result.stderr and vim.trim(result.stderr) ~= "" then
+          notify(vim.trim(result.stderr), vim.log.levels.WARN)
+        end
+      else
+        local stderr = vim.trim(result.stderr or "")
+        notify(
+          schema_error
+            or data_error
+            or (stderr ~= "" and stderr)
+            or "zk check returned invalid or incomplete JSON",
+          vim.log.levels.ERROR
+        )
+      end
+      if callback then
+        callback(result)
+      end
+    end
+  )
 end
 
 function M.new(callback)
@@ -643,6 +764,7 @@ function M.new(callback)
       notify(vim.trim(result.stderr), vim.log.levels.ERROR)
     else
       local path = vim.fs.joinpath(root, vim.trim(result.stdout))
+      notify_file(root, path, vim.lsp.protocol.FileChangeType.Created)
       edit_path(path, window)
     end
     if callback then
@@ -663,18 +785,22 @@ function M.remove(id, callback)
     notify("no Zettelkasten archive found", vim.log.levels.ERROR)
     return nil
   end
-  local target = vim.fs.normalize(vim.fs.joinpath(root, "zettel", id .. ".typ"))
+  if not id:match("^%d%d%d%d%d%d%d%d%d%d$") then
+    notify("Zettel ID must contain ten ASCII digits", vim.log.levels.ERROR)
+    return nil
+  end
   for _, loaded in ipairs(vim.api.nvim_list_bufs()) do
     if
       vim.api.nvim_buf_is_loaded(loaded)
-      and vim.fs.normalize(vim.api.nvim_buf_get_name(loaded)) == target
+      and zettel_id(loaded)
+      and same_root(archive_root(loaded), root)
       and vim.bo[loaded].modified
     then
-      notify("cannot remove a Zettel with unsaved changes", vim.log.levels.ERROR)
+      notify("cannot remove while notes in this archive have unsaved changes", vim.log.levels.ERROR)
       return nil
     end
   end
-  return run_cli(bufnr, { "remove", id }, function(result, root)
+  return run_cli(bufnr, { "remove", id }, function(result)
     if result.code ~= 0 then
       notify(vim.trim(result.stderr), vim.log.levels.ERROR)
     else
@@ -684,9 +810,17 @@ function M.remove(id, callback)
           vim.api.nvim_buf_is_valid(loaded)
           and vim.fs.normalize(vim.api.nvim_buf_get_name(loaded)) == removed
         then
-          vim.api.nvim_buf_delete(loaded, { force = true })
+          if vim.bo[loaded].modified then
+            notify(
+              "removed file; retaining buffer changes made during removal",
+              vim.log.levels.WARN
+            )
+          else
+            vim.api.nvim_buf_delete(loaded, { force = false })
+          end
         end
       end
+      notify_file(root, removed, vim.lsp.protocol.FileChangeType.Deleted)
       notify("removed " .. id)
     end
     if callback then
@@ -782,6 +916,23 @@ function M.setup(options)
       end,
     }
   )
+  vim.api.nvim_create_autocmd("BufWritePost", {
+    group = group,
+    callback = function(event)
+      local root = archive_root(event.buf)
+      if not root then
+        return
+      end
+      local path = vim.fs.normalize(vim.api.nvim_buf_get_name(event.buf))
+      if
+        zettel_id(event.buf)
+        or path == vim.fs.joinpath(root, "zk.toml")
+        or path == vim.fs.joinpath(root, "templates/zettel.typ")
+      then
+        notify_file(root, path, vim.lsp.protocol.FileChangeType.Changed)
+      end
+    end,
+  })
   vim.api.nvim_create_autocmd("BufDelete", {
     group = group,
     callback = function(event)

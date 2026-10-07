@@ -12,7 +12,9 @@ CONTENTS                                                        *zk-contents*
 ==============================================================================
 SETUP                                                              *zk-setup*
 
-The plugin requires Neovim 0.12 or newer and the `zk` executable.
+The plugin requires Neovim 0.12 or newer and a `zk` executable implementing
+ZK editor protocol 2 and public data schema 2. The current development baseline
+is zk 0.3.0 with archive format 3. Older protocols are not supported.
 
 To initialize a new archive with the bundled archive-local agent skills: >sh
 
@@ -41,6 +43,7 @@ paths against Neovim's current working directory, and validates the archive
 before selecting it. The canonical selected path is readable as
 `require("zk").archive`.
 
+The plugin appends `--archive` with the selected root to both command arrays.
 The configured archive starts one background `zk` language server during
 setup. A nearer `zk.toml` above the current buffer takes precedence and gets
 its own server when needed. Without `archive`, the plugin retains local-only
@@ -50,9 +53,18 @@ Tinymist can remain attached to the same Typst buffer. The plugin makes
 `zk.toml` a higher-priority Tinymist root marker than `.git`, so imports from
 `../lib/` work even when the archive is not a Git repository.
 
-The plugin requires ZK editor protocol version 1. It validates the descriptor
-reported by `zk lsp` during initialization and rejects missing or unsupported
-versions. The executable and plugin have independent release versions.
+The plugin validates both ZK protocol 2 and data schema 2 during initialization,
+then validates schema-2 envelopes before using custom query results. Missing
+or unsupported versions are rejected. Optional feature flags default to false.
+Executable, plugin, protocol, data schema, and archive-format versions are
+independent.
+
+Neovim dynamic file watching is enabled for notes, zk.toml, and
+templates/zettel.typ. Buffer writes and CLI creation/removal also send file
+notifications. Saved template changes update tracking; unsaved template edits
+do not. Invalid saved-schema reloads visibly report an error while retaining
+the server's previous view. Ordinary template/library editing belongs to
+Tinymist. The plugin does not require a presentation library to load an archive.
 
 Set `decorations = false` to disable title extmarks. Set `mappings = false` to
 disable all default mappings. Individual mapping values can also be replaced
@@ -71,10 +83,13 @@ COMMANDS                                                        *zk-commands*
     the quickfix list.
 
 :ZkDiagnostics                                       *:ZkDiagnostics*
-    Put diagnostics from the selected `zk` language server into quickfix.
+    Put published live diagnostics for open notes from the selected `zk`
+    language server into quickfix. This is not an archive-wide check.
 
 :ZkCheck                                             *:ZkCheck*
-    Run `zk check` against saved archive state.
+    Run `zk check --format json` against saved archive state and put diagnostics
+    into quickfix. A completed integrity check with exit status 1 still yields
+    useful diagnostics. Positions use saved bytes, not modified buffer text.
 
 :ZkNew                                               *:ZkNew*
     Run `zk new`, then edit the generated Zettel in the window where the
@@ -83,6 +98,9 @@ COMMANDS                                                        *zk-commands*
 
 :ZkRemove [ID]                                       *:ZkRemove*
     Run guarded removal for ID, or for the current Zettel when ID is omitted.
+    Refuse while any canonical note buffer in the selected archive is modified.
+    The CLI then checks saved incoming references, including self-references.
+    Other editors' unsaved changes are not visible to this guard.
 
 :ZkRefresh                                           *:ZkRefresh*
     Refresh title decorations in the current buffer.
@@ -119,30 +137,21 @@ After `@`, numeric text completes ID prefixes and other text searches Zettel
 titles without regard to case. Accepting an item replaces the temporary query
 with its ten-digit ID.
 
-`zk lsp` completes direct `#category.` fields with keys from the saved
-`#let category = (...)` dictionary in `lib/zettel.typ`. LSP cannot prevent
-Tinymist from returning items for the same request. Completion frontends can
-use `require("zk").filter_completion_items` to retain only ZK items in this
-context.
+Tinymist owns dictionary-member completion, including category dictionaries.
+No metadata field name has a built-in role. The plugin does not require or
+configure a completion frontend.
 
-For Blink, compose the filter into the source configuration: >lua
-
-  require("blink.cmp").setup({
-    sources = {
-      transform_items = function(ctx, items)
-        return require("zk").filter_completion_items(ctx, items)
-      end,
-    },
-  })
-<
-The helper leaves completion items unchanged outside direct category context.
-The ZK plugin does not require or configure Blink.
+`require("zk").filter_completion_items` is deprecated. It returns the original
+items unchanged in every context, so existing frontend configurations no longer
+intercept Tinymist results. Remove the helper from completion configuration.
 
 ==============================================================================
 DECORATIONS                                                  *zk-decorations*
 
-Resolved `@ID` ranges are concealed and replaced with target-title virtual
-text. Missing targets use the `ZkMissingReference` highlight. The raw source
+Decorations require archive-query and reference-title-decoration feature flags.
+Resolved `@ID` ranges are concealed and replaced with core target-title virtual
+text. A null title falls back to the target ID. Missing targets use the
+`ZkMissingReference` highlight. The raw source
 remains unchanged and becomes visible according to Neovim's conceal rules.
 
 Decorations come from `zk lsp` queries. The Lua plugin recognizes narrow
